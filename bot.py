@@ -224,7 +224,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if openai_client is None:
         await update.message.reply_text(
-            "Голосовые сообщения пока недоступны — не настроен OPENAI_API_KEY."
+            "Голосовые сообщения пока недоступны — добавь OPENAI_API_KEY в переменные Railway."
         )
         return
 
@@ -234,40 +234,51 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
     voice = update.message.voice
-    tg_file = await context.bot.get_file(voice.file_id)
+    if not voice:
+        await update.message.reply_text("Не удалось прочитать голосовое сообщение. Попробуй ещё раз.")
+        return
 
     text = None
-    error_info = ""
-
-    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
-        tmp_path = tmp.name
+    tmp_path = None
 
     try:
+        tg_file = await context.bot.get_file(voice.file_id)
+
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            tmp_path = tmp.name
+
         await tg_file.download_to_drive(tmp_path)
         size = os.path.getsize(tmp_path)
+        logger.info("Voice file downloaded: %s (%d bytes)", tmp_path, size)
+
         if size == 0:
-            error_info = "файл пустой"
-        else:
-            with open(tmp_path, "rb") as audio_file:
-                result = openai_client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=("voice.ogg", audio_file, "audio/ogg"),
-                    language="ru",
-                )
-            text = (result.text or "").strip() or None
+            raise ValueError("Загруженный файл пустой")
+
+        with open(tmp_path, "rb") as audio_file:
+            result = openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=("voice.ogg", audio_file, "audio/ogg"),
+                language="ru",
+            )
+        text = (result.text or "").strip() or None
+        logger.info("Whisper transcription: %r", text)
+
     except Exception as e:
-        logger.exception("Voice handling error")
-        error_info = str(e)
+        logger.exception("Voice handling error: %s", e)
+        await update.message.reply_text(
+            f"Не удалось распознать голосовое сообщение. Ошибка: {e}\n\nПопробуй ещё раз или напиши текстом."
+        )
+        return
     finally:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
     if not text:
-        detail = f" ({error_info})" if error_info else ""
         await update.message.reply_text(
-            f"Не удалось распознать голосовое сообщение{detail}. Попробуй ещё раз."
+            "Whisper не смог распознать речь. Попробуй ещё раз или напиши текстом."
         )
         return
 
