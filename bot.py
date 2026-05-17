@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20251001")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 MAX_HISTORY = 40
 
 ALLOWED_USERS = {
@@ -119,12 +119,12 @@ def ask_claude(system_prompt: str, history: List[dict], user_message: str) -> st
         ]
         reply = "\n".join(part.strip() for part in text_parts if part and part.strip())
         return reply or "Произошла ошибка — пустой ответ. Попробуй ещё раз."
-    except anthropic.APIError:
-        logger.exception("Claude API error")
-        return "Произошла ошибка при обращении к Claude. Проверь API ключ и лимиты."
-    except Exception:
-        logger.exception("Unexpected error")
-        return "Что-то пошло не так. Попробуй ещё раз."
+    except anthropic.APIError as e:
+        logger.exception("Claude API error: %s", e)
+        return f"Ошибка Claude API: {e}\n\nПроверь API ключ, название модели и лимиты аккаунта."
+    except Exception as e:
+        logger.exception("Unexpected error: %s", e)
+        return f"Что-то пошло не так: {e}\n\nПопробуй ещё раз."
 
 
 def _is_report_request(text: str) -> bool:
