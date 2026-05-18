@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import time
 from typing import Any, Dict, List
 
 import anthropic
@@ -51,6 +52,7 @@ CONTRACTING_MARKER    = "[КОНТРАКТ_УСТАНОВЛЕН]"
 CONTRACTING_MAX_TURNS = 7   # страховка: переключить в working если контракт затянулся
 WORKING_NEAR_END      = 20  # инъекция «завершай» в промпт
 WORKING_MAX_TURNS     = 25  # автопереключение в closing
+SESSION_TIMEOUT_SEC   = 15 * 3600  # 15 часов — после этого сессия считается новой
 
 ALLOWED_USERS = {
     "ErnestKh8",
@@ -90,8 +92,22 @@ def get_session(user_id: int) -> Dict[str, Any]:
             "phase": PHASE_CONTRACTING,
             "exchange_count": 0,
             "history": [],
+            "last_message_ts": None,
         }
     return sessions[user_id]
+
+
+def _maybe_reset_session(session: Dict[str, Any]) -> bool:
+    """Если с последнего сообщения прошло больше 15 часов — сбросить фазу
+    и счётчик (история сохраняется). Вернуть True если сброс произошёл."""
+    now = time.time()
+    last_ts = session.get("last_message_ts")
+    if last_ts is not None and (now - last_ts) > SESSION_TIMEOUT_SEC:
+        session["phase"] = PHASE_CONTRACTING
+        session["exchange_count"] = 0
+        logger.info("Session timeout: phase and counter reset")
+        return True
+    return False
 
 
 def init_clients() -> None:
@@ -175,6 +191,11 @@ async def _process_text(
     user_id = update.effective_user.id
     session = get_session(user_id)
     history = session["history"]
+
+    # Проверяем таймаут сессии до всего остального
+    _maybe_reset_session(session)
+    # Фиксируем время этого сообщения
+    session["last_message_ts"] = time.time()
 
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
