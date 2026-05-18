@@ -24,6 +24,8 @@ from telegram.ext import (
 
 from knowledge_base import (
     COACH_SYSTEM_PROMPT,
+    CONTRACTING_PROMPT,
+    CLOSING_PROMPT,
     REPORT_SYSTEM_PROMPT,
     WELCOME_MESSAGE,
 )
@@ -39,6 +41,16 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 MAX_HISTORY = 40
+
+# Фазы сессии
+PHASE_CONTRACTING = "contracting"
+PHASE_WORKING     = "working"
+PHASE_CLOSING     = "closing"
+
+CONTRACTING_MARKER    = "[КОНТРАКТ_УСТАНОВЛЕН]"
+CONTRACTING_MAX_TURNS = 7   # страховка: переключить в working если контракт затянулся
+WORKING_NEAR_END      = 20  # инъекция «завершай» в промпт
+WORKING_MAX_TURNS     = 25  # автопереключение в closing
 
 ALLOWED_USERS = {
     "ErnestKh8",
@@ -74,7 +86,11 @@ def _is_allowed(user) -> bool:
 
 def get_session(user_id: int) -> Dict[str, Any]:
     if user_id not in sessions:
-        sessions[user_id] = {"history": []}
+        sessions[user_id] = {
+            "phase": PHASE_CONTRACTING,
+            "exchange_count": 0,
+            "history": [],
+        }
     return sessions[user_id]
 
 
@@ -132,6 +148,24 @@ def _is_report_request(text: str) -> bool:
     return any(keyword in lower for keyword in REPORT_KEYWORDS)
 
 
+def _build_system_prompt(session: Dict[str, Any]) -> str:
+    """Выбрать промпт в зависимости от фазы сессии."""
+    phase = session["phase"]
+    if phase == PHASE_CONTRACTING:
+        return CONTRACTING_PROMPT
+    if phase == PHASE_CLOSING:
+        return CLOSING_PROMPT
+    # PHASE_WORKING
+    extra = ""
+    if session["exchange_count"] >= WORKING_NEAR_END:
+        extra = (
+            "\n\nВАЖНО: сессия приближается к завершению, осталось несколько обменов. "
+            "Мягко завершай работу с инструментом — переходи к интеграции, "
+            "ресурсам и рефлексии."
+        )
+    return COACH_SYSTEM_PROMPT + extra
+
+
 async def _process_text(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -147,15 +181,39 @@ async def _process_text(
         action=ChatAction.TYPING,
     )
 
+    # Запрос отчёта работает в любой фазе
     if _is_report_request(user_text) and history:
         reply = ask_claude(REPORT_SYSTEM_PROMPT, history, "Составь отчёт по нашей сессии.")
-    else:
-        reply = ask_claude(COACH_SYSTEM_PROMPT, history, user_text)
-        history.append({"role": "user", "content": user_text})
-        history.append({"role": "assistant", "content": reply})
+        await _send_long_message(update.message, reply)
+        return
 
-        if len(history) > MAX_HISTORY * 2:
-            history[:] = history[-(MAX_HISTORY * 2):]
+    system_prompt = _build_system_prompt(session)
+    reply = ask_claude(system_prompt, history, user_text)
+
+    # --- Переключение фаз ---
+
+    # Contracting → Working: маркер от Claude или страховка по числу обменов
+    if session["phase"] == PHASE_CONTRACTING:
+        user_turns = sum(1 for m in history if m["role"] == "user") + 1
+        if CONTRACTING_MARKER in reply or user_turns >= CONTRACTING_MAX_TURNS:
+            reply = reply.replace(CONTRACTING_MARKER, "").strip()
+            session["phase"] = PHASE_WORKING
+            session["exchange_count"] = 0
+            logger.info("Phase → WORKING (user_id=%s)", user_id)
+
+    # Working: считаем обмены, переключаем в Closing при достижении лимита
+    elif session["phase"] == PHASE_WORKING:
+        session["exchange_count"] += 1
+        if session["exchange_count"] >= WORKING_MAX_TURNS:
+            session["phase"] = PHASE_CLOSING
+            logger.info("Phase → CLOSING (user_id=%s)", user_id)
+
+    # Сохраняем в историю
+    history.append({"role": "user", "content": user_text})
+    history.append({"role": "assistant", "content": reply})
+
+    if len(history) > MAX_HISTORY * 2:
+        history[:] = history[-(MAX_HISTORY * 2):]
 
     await _send_long_message(update.message, reply)
 
