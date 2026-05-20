@@ -13,10 +13,11 @@ from typing import Any, Dict, List
 
 import anthropic
 import openai
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -44,9 +45,10 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 MAX_HISTORY = 40
 
 # Фазы сессии
-PHASE_CONTRACTING = "contracting"
-PHASE_WORKING     = "working"
-PHASE_CLOSING     = "closing"
+PHASE_CONTRACTING    = "contracting"
+PHASE_WORKING        = "working"
+PHASE_CONFIRM_CLOSE  = "confirm_close"
+PHASE_CLOSING        = "closing"
 
 CONTRACTING_MARKER    = "[КОНТРАКТ_УСТАНОВЛЕН]"
 CONTRACTING_MAX_TURNS = 7   # страховка: переключить в working если контракт затянулся
@@ -222,12 +224,12 @@ async def _process_text(
             session["exchange_count"] = 0
             logger.info("Phase → WORKING (user_id=%s)", user_id)
 
-    # Working: считаем обмены, переключаем в Closing при достижении лимита
+    # Working: считаем обмены, при достижении лимита — запрашиваем подтверждение
     elif session["phase"] == PHASE_WORKING:
         session["exchange_count"] += 1
         if session["exchange_count"] >= WORKING_MAX_TURNS:
-            session["phase"] = PHASE_CLOSING
-            logger.info("Phase → CLOSING (user_id=%s)", user_id)
+            session["phase"] = PHASE_CONFIRM_CLOSE
+            logger.info("Phase → CONFIRM_CLOSE (user_id=%s)", user_id)
 
     # Сохраняем в историю
     history.append({"role": "user", "content": user_text})
@@ -237,6 +239,19 @@ async def _process_text(
         history[:] = history[-(MAX_HISTORY * 2):]
 
     await _send_long_message(update.message, reply)
+
+    # Если только что перешли в confirm_close — показываем кнопки
+    if session["phase"] == PHASE_CONFIRM_CLOSE:
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Да, завершаем", callback_data="close_yes"),
+                InlineKeyboardButton("Нет, продолжаем", callback_data="close_no"),
+            ]
+        ])
+        await update.message.reply_text(
+            "Закрываем сессию или хочешь продолжить?",
+            reply_markup=keyboard,
+        )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -364,6 +379,32 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _process_text(update, context, text)
 
 
+async def confirm_close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    user_id = query.from_user.id
+    session = get_session(user_id)
+
+    if query.data == "close_yes":
+        session["phase"] = PHASE_CLOSING
+        logger.info("Phase → CLOSING (user_id=%s)", user_id)
+        await query.edit_message_text("Хорошо, завершаем. 🙏")
+        # Запускаем фазу closing — первый вопрос про состояние
+        system_prompt = CLOSING_PROMPT
+        opening = ask_claude(system_prompt, session["history"], "Начни завершение сессии.")
+        await _send_long_message(query.message, opening)
+
+    elif query.data == "close_no":
+        # Откатываем счётчик — даём ещё несколько обменов
+        session["phase"] = PHASE_WORKING
+        session["exchange_count"] = WORKING_NEAR_END - 2
+        logger.info("Phase → WORKING (continued, user_id=%s)", user_id)
+        await query.edit_message_text("Продолжаем. 👍")
+
+
 async def _send_long_message(message, text: str, chunk_size: int = 4000) -> None:
     if len(text) <= 4096:
         await message.reply_text(text)
@@ -391,6 +432,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("reset", reset))
     application.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CallbackQueryHandler(confirm_close_callback, pattern="^close_(yes|no)$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     application.add_error_handler(error_handler)
