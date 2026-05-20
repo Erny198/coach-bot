@@ -26,6 +26,7 @@ from telegram.ext import (
 
 from knowledge_base import (
     COACH_SYSTEM_PROMPT,
+    GREETING_PROMPT,
     CONTRACTING_PROMPT,
     CLOSING_PROMPT,
     REPORT_SYSTEM_PROMPT,
@@ -45,6 +46,7 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 MAX_HISTORY = 40
 
 # Фазы сессии
+PHASE_GREETING        = "greeting"
 PHASE_CONTRACTING     = "contracting"
 PHASE_WORKING         = "working"
 PHASE_CONFIRM_CLOSE   = "confirm_close"
@@ -52,10 +54,11 @@ PHASE_CLOSING         = "closing"
 PHASE_TIMEOUT_CONFIRM = "timeout_confirm"
 
 CONTRACTING_MARKER    = "[КОНТРАКТ_УСТАНОВЛЕН]"
-CONTRACTING_MAX_TURNS = 7   # страховка: переключить в working если контракт затянулся
-WORKING_NEAR_END      = 20  # инъекция «завершай» в промпт
-WORKING_MAX_TURNS     = 25  # автопереключение в closing
-SESSION_TIMEOUT_SEC   = 15 * 3600  # 15 часов — после этого сессия считается новой
+NAME_MARKER           = "[ИМЯ_ПОДТВЕРЖДЕНО:"   # формат: [ИМЯ_ПОДТВЕРЖДЕНО: Имя]
+CONTRACTING_MAX_TURNS = 7
+WORKING_NEAR_END      = 20
+WORKING_MAX_TURNS     = 25
+SESSION_TIMEOUT_SEC   = 15 * 3600
 
 ALLOWED_USERS = {
     "ErnestKh8",
@@ -80,6 +83,7 @@ REPORT_KEYWORDS = {
 }
 
 sessions: Dict[int, Dict[str, Any]] = {}
+user_names: Dict[int, str] = {}          # имя хранится отдельно — не сбрасывается
 claude_client: anthropic.Anthropic | None = None
 openai_client: openai.OpenAI | None = None
 
@@ -92,13 +96,47 @@ def _is_allowed(user) -> bool:
 
 def get_session(user_id: int) -> Dict[str, Any]:
     if user_id not in sessions:
+        name_known = user_id in user_names
         sessions[user_id] = {
-            "phase": PHASE_CONTRACTING,
+            "phase": PHASE_CONTRACTING if name_known else PHASE_GREETING,
             "exchange_count": 0,
             "history": [],
             "last_message_ts": None,
         }
     return sessions[user_id]
+
+
+def _get_name(user_id: int) -> str | None:
+    return user_names.get(user_id)
+
+
+def _set_name(user_id: int, name: str) -> None:
+    user_names[user_id] = name
+    logger.info("Name stored: %s → %s", user_id, name)
+
+
+def _extract_name_from_marker(reply: str) -> str | None:
+    """Достать имя из маркера [ИМЯ_ПОДТВЕРЖДЕНО: Имя]."""
+    import re
+    m = re.search(r"\[ИМЯ_ПОДТВЕРЖДЕНО:\s*(.+?)\]", reply)
+    return m.group(1).strip() if m else None
+
+
+def _detect_name_update(text: str) -> str | None:
+    """Если пользователь называет себя в разговоре — вернуть имя."""
+    import re
+    patterns = [
+        r"меня зовут\s+([А-ЯЁа-яёA-Za-z]+)",
+        r"зови меня\s+([А-ЯЁа-яёA-Za-z]+)",
+        r"моё имя\s+([А-ЯЁа-яёA-Za-z]+)",
+        r"мое имя\s+([А-ЯЁа-яёA-Za-z]+)",
+        r"я\s+[-—]\s*([А-ЯЁа-яёA-Za-z]+)",
+    ]
+    for p in patterns:
+        m = re.search(p, text, re.IGNORECASE)
+        if m:
+            return m.group(1).capitalize()
+    return None
 
 
 def _is_session_timeout(session: Dict[str, Any]) -> bool:
@@ -161,13 +199,30 @@ def _is_report_request(text: str) -> bool:
     return any(keyword in lower for keyword in REPORT_KEYWORDS)
 
 
-def _build_system_prompt(session: Dict[str, Any]) -> str:
-    """Выбрать промпт в зависимости от фазы сессии."""
+def _name_prefix(user_id: int) -> str:
+    """Сформировать префикс с именем для инжекции в промпт."""
+    name = _get_name(user_id)
+    if not name:
+        return ""
+    return (
+        f"Имя человека: {name}. "
+        f"Обращайся к нему по имени там, где это естественно и уместно — "
+        f"но не слишком часто, не в каждом сообщении.\n\n"
+    )
+
+
+def _build_system_prompt(session: Dict[str, Any], user_id: int = 0) -> str:
+    """Выбрать промпт в зависимости от фазы сессии, добавить имя."""
     phase = session["phase"]
+    prefix = _name_prefix(user_id)
+
+    if phase == PHASE_GREETING:
+        return GREETING_PROMPT          # без имени — мы его ещё не знаем
     if phase == PHASE_CONTRACTING:
-        return CONTRACTING_PROMPT
+        return prefix + CONTRACTING_PROMPT
     if phase == PHASE_CLOSING:
-        return CLOSING_PROMPT
+        return prefix + CLOSING_PROMPT
+
     # PHASE_WORKING
     extra = ""
     if session["exchange_count"] >= WORKING_NEAR_END:
@@ -176,7 +231,7 @@ def _build_system_prompt(session: Dict[str, Any]) -> str:
             "Мягко завершай работу с инструментом — переходи к интеграции, "
             "ресурсам и рефлексии."
         )
-    return COACH_SYSTEM_PROMPT + extra
+    return prefix + COACH_SYSTEM_PROMPT + extra
 
 
 async def _process_text(
@@ -226,13 +281,27 @@ async def _process_text(
         await _send_long_message(update.message, reply)
         return
 
-    system_prompt = _build_system_prompt(session)
+    # Если пользователь называет себя в разговоре — обновляем имя
+    new_name = _detect_name_update(user_text)
+    if new_name and session["phase"] not in (PHASE_GREETING,):
+        _set_name(user_id, new_name)
+
+    system_prompt = _build_system_prompt(session, user_id)
     reply = ask_claude(system_prompt, history, user_text)
 
     # --- Переключение фаз ---
 
+    # Greeting → Contracting: маркер с именем
+    if session["phase"] == PHASE_GREETING:
+        name = _extract_name_from_marker(reply)
+        if name:
+            _set_name(user_id, name)
+            reply = reply[:reply.find("[ИМЯ_ПОДТВЕРЖДЕНО:")].strip()
+            session["phase"] = PHASE_CONTRACTING
+            logger.info("Phase → CONTRACTING, name=%s (user_id=%s)", name, user_id)
+
     # Contracting → Working: маркер от Claude или страховка по числу обменов
-    if session["phase"] == PHASE_CONTRACTING:
+    elif session["phase"] == PHASE_CONTRACTING:
         user_turns = sum(1 for m in history if m["role"] == "user") + 1
         if CONTRACTING_MARKER in reply or user_turns >= CONTRACTING_MAX_TURNS:
             reply = reply.replace(CONTRACTING_MARKER, "").strip()
@@ -279,18 +348,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Доступ ограничен. Обратись к администратору.")
         return
 
-    sessions.pop(update.effective_user.id, None)
+    user_id = update.effective_user.id
+    sessions.pop(user_id, None)
     await update.message.reply_text(WELCOME_MESSAGE)
+    # Если имя уже знаем — сразу создаём сессию с CONTRACTING (greeting пропускается)
+    get_session(user_id)
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     del context
     if not update.effective_user or not update.message:
         return
-    sessions.pop(update.effective_user.id, None)
-    await update.message.reply_text(
-        "Сессия сброшена. Начнём заново — с чем ты пришёл(а) сегодня?"
-    )
+    user_id = update.effective_user.id
+    sessions.pop(user_id, None)
+    # Имя сохраняется (user_names не трогаем)
+    name = _get_name(user_id)
+    get_session(user_id)   # создаст сессию с правильной фазой (contracting если имя есть)
+    if name:
+        await update.message.reply_text(
+            f"Сессия сброшена. Начнём заново, {name}? С чем пришёл(а) сегодня?"
+        )
+    else:
+        await update.message.reply_text(
+            "Сессия сброшена. Начнём заново — с чем пришёл(а) сегодня?"
+        )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
