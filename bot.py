@@ -45,10 +45,11 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 MAX_HISTORY = 40
 
 # Фазы сессии
-PHASE_CONTRACTING    = "contracting"
-PHASE_WORKING        = "working"
-PHASE_CONFIRM_CLOSE  = "confirm_close"
-PHASE_CLOSING        = "closing"
+PHASE_CONTRACTING     = "contracting"
+PHASE_WORKING         = "working"
+PHASE_CONFIRM_CLOSE   = "confirm_close"
+PHASE_CLOSING         = "closing"
+PHASE_TIMEOUT_CONFIRM = "timeout_confirm"
 
 CONTRACTING_MARKER    = "[КОНТРАКТ_УСТАНОВЛЕН]"
 CONTRACTING_MAX_TURNS = 7   # страховка: переключить в working если контракт затянулся
@@ -100,17 +101,10 @@ def get_session(user_id: int) -> Dict[str, Any]:
     return sessions[user_id]
 
 
-def _maybe_reset_session(session: Dict[str, Any]) -> bool:
-    """Если с последнего сообщения прошло больше 15 часов — сбросить фазу
-    и счётчик (история сохраняется). Вернуть True если сброс произошёл."""
-    now = time.time()
+def _is_session_timeout(session: Dict[str, Any]) -> bool:
+    """Вернуть True если с последнего сообщения прошло больше 15 часов."""
     last_ts = session.get("last_message_ts")
-    if last_ts is not None and (now - last_ts) > SESSION_TIMEOUT_SEC:
-        session["phase"] = PHASE_CONTRACTING
-        session["exchange_count"] = 0
-        logger.info("Session timeout: phase and counter reset")
-        return True
-    return False
+    return last_ts is not None and (time.time() - last_ts) > SESSION_TIMEOUT_SEC
 
 
 def init_clients() -> None:
@@ -195,8 +189,29 @@ async def _process_text(
     session = get_session(user_id)
     history = session["history"]
 
-    # Проверяем таймаут сессии до всего остального
-    _maybe_reset_session(session)
+    # Проверяем таймаут — если прошло 15+ часов, спрашиваем что делать
+    if _is_session_timeout(session):
+        session["pending_text"] = user_text
+        session["prev_phase"]   = session["phase"]
+        session["phase"]        = PHASE_TIMEOUT_CONFIRM
+        session["last_message_ts"] = time.time()
+        import random
+        greetings = [
+            "С момента нашей последней встречи прошло немало времени. Начнём новую сессию или продолжим с того места, где остановились?",
+            "Рад снова тебя видеть! Прошло больше 15 часов. Хочешь начать всё с начала или продолжим незавершённую сессию?",
+            "Привет! Давно не общались. Начнём новую сессию или вернёмся к тому, о чём говорили?",
+            "Снова здесь — хорошо. Прошло время. Как хочешь: новая сессия или продолжаем?",
+        ]
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Новая сессия 🌱", callback_data="timeout_new"),
+            InlineKeyboardButton("Продолжаем 🔄",  callback_data="timeout_continue"),
+        ]])
+        await update.message.reply_text(
+            random.choice(greetings),
+            reply_markup=keyboard,
+        )
+        return
+
     # Фиксируем время этого сообщения
     session["last_message_ts"] = time.time()
 
@@ -380,6 +395,46 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _process_text(update, context, text)
 
 
+async def timeout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    user_id = query.from_user.id
+    session = get_session(user_id)
+    pending  = session.pop("pending_text", "")
+    prev     = session.pop("prev_phase", PHASE_CONTRACTING)
+
+    if query.data == "timeout_new":
+        session["phase"]         = PHASE_CONTRACTING
+        session["exchange_count"] = 0
+        await query.edit_message_text("Начинаем новую сессию. 🌱")
+        logger.info("Timeout → new session (user_id=%s)", user_id)
+    else:  # timeout_continue
+        session["phase"] = prev
+        await query.edit_message_text("Продолжаем с того места. 🔄")
+        logger.info("Timeout → continue session (user_id=%s)", user_id)
+
+    # Обрабатываем отложенное сообщение пользователя
+    if pending:
+        session["last_message_ts"] = time.time()
+        system_prompt = _build_system_prompt(session)
+        reply = ask_claude(system_prompt, session["history"], pending)
+
+        if session["phase"] == PHASE_CONTRACTING and CONTRACTING_MARKER in reply:
+            reply = reply.replace(CONTRACTING_MARKER, "").strip()
+            session["phase"] = PHASE_WORKING
+            session["exchange_count"] = 0
+
+        elif session["phase"] == PHASE_WORKING:
+            session["exchange_count"] += 1
+
+        session["history"].append({"role": "user",      "content": pending})
+        session["history"].append({"role": "assistant", "content": reply})
+        await _send_long_message(query.message, reply)
+
+
 async def confirm_close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -433,6 +488,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("reset", reset))
     application.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CallbackQueryHandler(timeout_callback,       pattern="^timeout_(new|continue)$"))
     application.add_handler(CallbackQueryHandler(confirm_close_callback, pattern="^close_(yes|no)$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
