@@ -68,6 +68,7 @@ ALLOWED_USERS = {
     "majorkina67",
     "KondakovSL",
     "ArturGrigoryan359",
+    "Seda2404",
 }
 
 # Ключевые слова для запроса отчёта
