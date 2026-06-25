@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Е-Коуч — кабинет</title>
+<style>
+  :root{
+    --paper:#faf9f5; --paper2:#f3efe7; --card:#ffffff; --ink:#1a1916; --muted:#6c6a63;
+    --line:#e6e0d4; --clay:#c45a3b; --clay-d:#a2421f; --clay-soft:#efe2da; --teal:#3f6f5e; --radius:14px;
+  }
+  *{box-sizing:border-box} html,body{height:100%}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,Arial,sans-serif;
+    display:flex;flex-direction:column;height:100vh;-webkit-font-smoothing:antialiased}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:14px 22px;border-bottom:1px solid var(--line);background:rgba(250,249,245,.9);backdrop-filter:blur(8px)}
+  .logo{font-weight:700;letter-spacing:-.02em;font-size:18px}.logo span{color:var(--clay)}
+  .sub{font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center}
+  .badge{background:var(--paper2);border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--muted)}
+  .badge.ok{color:var(--teal);border-color:#c8ddd3;background:#eef5f1}
+  main{display:flex;flex:1;min-height:0}
+  aside{width:256px;border-right:1px solid var(--line);background:var(--paper2);padding:16px;overflow:auto;flex:0 0 256px}
+  .navttl{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:16px 6px 8px;font-weight:600}
+  .item{display:flex;gap:10px;align-items:center;padding:11px 13px;border-radius:11px;cursor:pointer;color:var(--ink);border:1px solid transparent}
+  .item:hover{background:var(--card)}
+  .item.active{background:var(--card);border-color:var(--line)}
+  .item small{display:block;color:var(--muted);font-size:12px}
+  .lock{margin-left:auto;font-size:12px;color:var(--muted)}
+  .chat{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--paper)}
+  .chhead{padding:14px 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .chhead h2{font-size:16px;margin:0;font-weight:600}
+  .chhead .hint{font-size:12px;color:var(--muted)}
+  .btn{border:1px solid transparent;background:var(--clay);color:#fff;border-radius:10px;padding:9px 16px;font-size:14px;font-weight:600;cursor:pointer;transition:.16s}
+  .btn:hover{background:var(--clay-d)}
+  .btn.ghost{background:transparent;border-color:var(--line);color:var(--muted)}
+  .btn.ghost:hover{border-color:var(--ink);color:var(--ink)}
+  .msgs{flex:1;overflow:auto;padding:24px;display:flex;flex-direction:column;gap:12px}
+  .msg{max-width:760px;padding:12px 16px;border-radius:16px;white-space:pre-wrap;line-height:1.55}
+  .msg.a{background:var(--card);border:1px solid var(--line);align-self:flex-start;border-bottom-left-radius:5px}
+  .msg.u{background:var(--clay-soft);align-self:flex-end;border-bottom-right-radius:5px}
+  .empty{margin:auto;text-align:center;color:var(--muted);max-width:460px}
+  .empty h3{color:var(--ink);font-size:19px;margin-bottom:6px}
+  .compose{padding:16px 22px;border-top:1px solid var(--line);display:flex;gap:10px;background:var(--paper)}
+  .compose textarea{flex:1;resize:none;background:var(--card);border:1px solid var(--line);
+    color:var(--ink);border-radius:12px;padding:12px 15px;font:inherit;max-height:140px}
+  .compose textarea:focus{outline:none;border-color:var(--clay)}
+  .compose textarea:disabled{opacity:.5}
+  .paywall{margin:auto;max-width:480px;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:30px;color:var(--ink)}
+  .paywall .btn{margin-top:16px}
+  .topics,.instruments{display:flex;flex-wrap:wrap;gap:8px;padding:14px 22px 4px}
+  .blockttl{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:12px 0 6px}
+  .chiprow{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px}
+  .chip{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:7px 14px;font-size:13px;cursor:pointer;color:var(--ink);transition:.14s}
+  .chip:hover{border-color:var(--clay)}
+  .chip.on{border-color:var(--clay);background:var(--clay-soft);color:var(--clay-d);font-weight:600}
+  a{color:var(--clay-d)}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">Е-<span>Коуч</span></div>
+  <div class="sub" id="sub">…</div>
+</header>
+<main>
+  <aside>
+    <div class="navttl">Режимы</div>
+    <div id="nav"></div>
+    <div class="navttl">Инструменты</div>
+    <div class="item" data-mode="instruments"><div>📋 Инструменты<small>справочник вопросов</small></div></div>
+  </aside>
+
+  <section class="chat">
+    <div class="chead">
+      <div><h2 id="ctitle">Выбери режим</h2><div class="hint" id="chint"></div></div>
+      <button class="btn ghost" id="resetBtn" style="display:none" onclick="resetThread()">Новый диалог</button>
+    </div>
+    <div class="topics" id="topics" style="display:none"></div>
+    <div class="instruments" id="instr" style="display:none"></div>
+    <div class="msgs" id="msgs"><div class="empty"><h3>Добро пожаловать в кабинет</h3><p>Слева выбери режим: Коуч, Коучи, Тренер или Супервизор — и начни работать прямо в браузере. Прогресс общий с ботом.</p></div></div>
+    <div class="compose">
+      <textarea id="inp" rows="1" placeholder="Напиши сообщение…" disabled onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}"></textarea>
+      <button class="btn" id="sendBtn" onclick="send()" disabled>Отправить</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const MODES = [
+  {key:"coach",   t:"🧭 Коуч",      s:"бот коучит тебя"},
+  {key:"coachee", t:"🎓 Коучи",     s:"бот = твой клиент"},
+  {key:"trainer", t:"🥊 Тренер",    s:"тренировка вопросов"},
+  {key:"supervisor", t:"🔬 Супервизор", s:"разбор сессии"},
+];
+let state=null, cur=null, curTopic=null, busy=false;
+
+async function api(url, opts){ const r=await fetch(url,Object.assign({credentials:"same-origin"},opts)); return r; }
+function el(id){ return document.getElementById(id); }
+
+async function loadState(){
+  const r=await api("/app/api/state"); if(r.status!==200){ el("sub").textContent="Войдите из бота"; return; }
+  state=await r.json();
+  const tier = state.active ? (state.tier||"подписка") : "бесплатно";
+  el("sub").innerHTML = (state.name?`<span>${state.name}</span>`:"")+
+    `<span class="badge ${state.active?'ok':''}">${state.active?'Подписка активна':'Бесплатный доступ'}</span>`;
+  renderNav();
+}
+
+function modeAllowed(key){
+  if(state && state.modes && state.modes.includes(key==='coachee'||key==='trainer'?'trainer':(key==='coach'?'coach':key))) return true;
+  // бесплатные действия
+  const f=state?state.free:{};
+  if(key==='coach') return f.coach[0]<f.coach[1];
+  if(key==='coachee') return f.coachee[0]<f.coachee[1];
+  if(key==='trainer') return f.trainer_topics[0]<f.trainer_topics[1];
+  if(key==='supervisor') return false;
+  return true;
+}
+
+function renderNav(){
+  const nav=el("nav"); nav.innerHTML="";
+  for(const m of MODES){
+    const d=document.createElement("div"); d.className="item"; d.dataset.mode=m.key;
+    const free = !(state&&state.active);
+    d.innerHTML=`<div>${m.t}<small>${m.s}</small></div>`+(modeAllowed(m.key)?"":'<span class="lock">🔒</span>');
+    d.onclick=()=>openMode(m.key); nav.appendChild(d);
+  }
+  document.querySelector('[data-mode="instruments"]').onclick=()=>openInstruments();
+}
+
+function setActive(key){ document.querySelectorAll('.item').forEach(i=>i.classList.toggle('active', i.dataset.mode===key)); }
+
+async function openMode(key){
+  cur=key; curTopic=null; setActive(key);
+  el("topics").style.display="none"; el("instr").style.display="none";
+  const m=MODES.find(x=>x.key===key);
+  el("ctitle").textContent=m.t.replace(/^[^ ]+ /,''); el("chint").textContent=m.s;
+  if(key==="trainer"){ await showTopics(); el("msgs").innerHTML='<div class="empty"><h3>Выбери тему</h3><p>Сверху выбери тему тренировки — и начинай задавать вопросы.</p></div>'; enableInput(false); el("resetBtn").style.display="none"; return; }
+  el("resetBtn").style.display="";
+  el("msgs").innerHTML='<div class="empty"><h3>Начни сессию</h3><p>Напиши первое сообщение — '+(key==='supervisor'?'вставь текст своей сессии для разбора.':'и я включусь в работу.')+'</p></div>';
+  enableInput(true);
+}
+
+async function showTopics(){
+  const box=el("topics"); box.style.display="block"; box.innerHTML="загрузка тем…";
+  const r=await api("/app/api/topics"); const d=await r.json();
+  box.innerHTML="";
+  for(const b of (d.blocks||[])){
+    const h=document.createElement("div"); h.className="blockttl"; h.textContent=(b.emoji?b.emoji+" ":"")+b.name; box.appendChild(h);
+    const row=document.createElement("div"); row.className="chiprow";
+    for(const t of b.topics){
+      const c=document.createElement("div"); c.className="chip"; c.textContent=(t.emoji?t.emoji+" ":"")+t.name;
+      c.onclick=()=>{ curTopic=t.key; document.querySelectorAll('#topics .chip').forEach(x=>x.classList.remove('on')); c.classList.add('on');
+        el("msgs").innerHTML=""; enableInput(true); el("resetBtn").style.display=""; };
+      row.appendChild(c);
+    }
+    box.appendChild(row);
+  }
+}
+
+async function openInstruments(){
+  cur="instruments"; setActive("instruments"); el("topics").style.display="none"; el("resetBtn").style.display="none";
+  el("ctitle").textContent="Инструменты"; el("chint").textContent="справочник вопросов"; enableInput(false);
+  // используем список тем как заглушку нет — берём фикс. ключи через /app/api/instrument
+  el("msgs").innerHTML='<div class="empty"><h3>Справочник инструментов</h3><p>Открой инструмент через бота, либо используй режимы для практики. (Списки вопросов доступны по подписке.)</p></div>';
+}
+
+function enableInput(on){ el("inp").disabled=!on; el("sendBtn").disabled=!on; if(on) el("inp").focus(); }
+
+function addMsg(role, text){
+  const m=el("msgs"); if(m.querySelector('.empty')) m.innerHTML="";
+  const d=document.createElement("div"); d.className="msg "+(role==="user"?"u":"a"); d.textContent=text; m.appendChild(d); m.scrollTop=m.scrollHeight; return d;
+}
+
+async function send(){
+  if(busy) return; const inp=el("inp"); const text=inp.value.trim(); if(!text||!cur) return;
+  if(cur==="trainer"&&!curTopic){ return; }
+  busy=true; addMsg("user",text); inp.value=""; enableInput(false);
+  const typing=addMsg("assistant","…");
+  try{
+    const r=await api("/app/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({mode:cur, topic:curTopic, message:text})});
+    if(r.status===402){ const d=await r.json(); typing.remove(); showPaywall(d.paywall); busy=false; return; }
+    const d=await r.json(); typing.textContent = d.reply || d.error || "Ошибка.";
+  }catch(e){ typing.textContent="Ошибка сети."; }
+  enableInput(true); busy=false; loadState();
+}
+
+function showPaywall(text){
+  el("msgs").innerHTML='<div class="paywall"><div>'+(text||"Доступно по подписке.").replace(/\n/g,"<br>")+
+    '</div><button class="btn" onclick="alert(\'Оформление подписки — в боте: кнопка «Подписка».\')">Оформить подписку</button></div>';
+  enableInput(false);
+}
+
+async function resetThread(){
+  if(!cur) return;
+  await api("/app/api/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:cur,topic:curTopic})});
+  el("msgs").innerHTML='<div class="empty"><h3>Новый диалог</h3><p>Начни заново.</p></div>'; enableInput(cur!=="trainer"||!!curTopic);
+}
+
+loadState();
+</script>
+</body>
+</html>

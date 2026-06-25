@@ -1,0 +1,22 @@
+[Unit]
+Description=CoachDojo Telegram bot (polling + ЮKassa bridge :8080)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=coachbot
+Group=coachbot
+WorkingDirectory=/opt/coach-bot/Aico_coa
+EnvironmentFile=/opt/coach-bot/Aico_coa/.env
+ExecStart=/opt/coach-bot/Aico_coa/.venv/bin/python bot.py
+Restart=always
+RestartSec=5
+# Каталог данных (БД, JSON). Должен существовать и принадлежать coachbot.
+StateDirectory=coach-bot
+# Безопасность
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
