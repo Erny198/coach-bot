@@ -2141,14 +2141,36 @@ L — ЯЗЫК (Language): повторяющиеся слова, метафор
 }
 
 
-def get_trainer_prompt(topic_key: str) -> str:
-    """Собрать полный промпт тренера для конкретной темы."""
+try:
+    from trainer_cases import TRAINER_CASES
+except ImportError:
+    TRAINER_CASES = {}
+
+
+def get_case_count(topic_key: str) -> int:
+    return len(TRAINER_CASES.get(topic_key, []))
+
+
+def get_case_text(topic_key: str, idx: int) -> str | None:
+    cases = TRAINER_CASES.get(topic_key, [])
+    return cases[idx] if 0 <= idx < len(cases) else None
+
+
+def get_trainer_prompt(topic_key: str, case_text: str | None = None) -> str:
+    """Собрать полный промпт тренера. Если передан case_text — модель обязана
+    использовать ИМЕННО его как первую ситуацию (курируемый кейс из банка)."""
     topic = TRAINER_TOPICS.get(topic_key, {})
     details = TOPIC_DETAILS.get(topic_key, "")
-    return TRAINER_SYSTEM_PROMPT_TEMPLATE.format(
+    prompt = TRAINER_SYSTEM_PROMPT_TEMPLATE.format(
         topic_name=topic.get("name", topic_key),
         topic_details=details,
     )
+    if case_text:
+        prompt += (
+            "\n\nПЕРВАЯ СИТУАЦИЯ ДЛЯ ПРАКТИКИ — используй ИМЕННО ЭТУ как первый кейс "
+            f"(не выдумывай свою): {case_text}"
+        )
+    return prompt
 
 
 # ============================================================
@@ -3670,3 +3692,53 @@ def block_name(block_id: str) -> str:
         if bid == block_id:
             return f"{emoji} {name}"
     return block_id
+
+
+# ============================================================
+# ВНУТРЕННИЙ АРСЕНАЛ КОУЧА — вся библиотека инструментов одним справочником.
+# Подмешивается в системный промпт режима «Коуч», чтобы он выбирал инструмент
+# под запрос клиента из ВСЕЙ базы, но НИКОГДА не называл его клиенту.
+# ============================================================
+_BLOCK_PURPOSE = {
+    "goal":      "запрос про цель, выбор, мотивацию, смысл, прояснение «чего я хочу»",
+    "presence":  "клиент перегружен или не в контакте с собой, сильные эмоции — замедлить и услышать",
+    "listening": "размытые обобщения («всегда», «никто»), неточная речь — уточнить и заземлить",
+    "awareness": "ограничивающие убеждения, застрявшая точка зрения, конфликт частей, слепые зоны",
+    "patterns":  "повторяющиеся сценарии и роли, глубинная работа, переходы и потери",
+    "action":    "переход к действию, развитие, обратная связь, ассертивность, закрепление успеха",
+}
+
+
+def _signature_questions(instr_key: str, limit: int = 3) -> str:
+    """Сигнатурные вопросы инструмента — берём строки с «?» в любом формате
+    (•, 1., -), чтобы покрыть и нумерованные карточки."""
+    text = INSTRUMENT_QUESTIONS.get(instr_key, "")
+    qs = []
+    for ln in text.splitlines():
+        s = ln.strip().lstrip("•-—0123456789.) ").strip()
+        if "?" in s:
+            qs.append(s)
+        if len(qs) >= limit:
+            break
+    return " ".join(qs)
+
+
+def build_coach_toolbox() -> str:
+    lines = [
+        "\n\n=== РАСШИРЕННЫЙ АРСЕНАЛ (внутренняя кухня — клиент не знает названий) ===",
+        "Помимо подробных фреймворков выше, в твоём распоряжении ВСЯ библиотека инструментов.",
+        "Выбирай инструмент ИСХОДЯ ИЗ ЗАПРОСА клиента. Никогда не называй его клиенту —",
+        "просто веди вопросами. Ниже инструменты сгруппированы по типу запроса.",
+    ]
+    for bid, emoji, name in BLOCKS:
+        lines.append(f"\n[{name}] — когда {_BLOCK_PURPOSE.get(bid, '')}:")
+        for key in INSTRUMENT_BLOCKS.get(bid, []):
+            info = INSTRUMENTS.get(key)
+            if not info:
+                continue
+            sig = _signature_questions(key)
+            lines.append(f"• {info['name']}: {sig}")
+    return "\n".join(lines)
+
+
+COACH_TOOLBOX = build_coach_toolbox()

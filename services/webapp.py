@@ -22,7 +22,7 @@ from db.session import AsyncSessionLocal
 from config import pricing
 from services import access, llm, sessions
 from knowledge_base import (
-    COACH_SYSTEM_PROMPT, COACHEE_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT,
+    COACH_SYSTEM_PROMPT, COACH_TOOLBOX, COACHEE_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT,
     get_trainer_prompt, TRAINER_TOPICS, INSTRUMENTS, INSTRUMENT_QUESTIONS,
     BLOCKS, TOPIC_BLOCKS,
 )
@@ -34,7 +34,7 @@ _APP_HTML = os.path.join(os.path.dirname(os.path.dirname(__file__)), "landing", 
 _STUB = "<!doctype html><meta charset=utf-8><title>Е-Коуч</title><h2>Откройте веб-версию из бота — по персональной ссылке.</h2>"
 
 SYSTEM_BY_MODE = {
-    "coach": lambda topic: COACH_SYSTEM_PROMPT,
+    "coach": lambda topic: COACH_SYSTEM_PROMPT + COACH_TOOLBOX,
     "coachee": lambda topic: COACHEE_SYSTEM_PROMPT,
     "supervisor": lambda topic: SUPERVISOR_SYSTEM_PROMPT,
     "trainer": lambda topic: get_trainer_prompt(topic) if topic else None,
@@ -134,14 +134,21 @@ async def _chat(request: web.Request) -> web.Response:
     message = (body.get("message") or "").strip()
     if mode not in SYSTEM_BY_MODE or not message:
         return web.json_response({"error": "bad_request"}, status=400)
-    system = SYSTEM_BY_MODE[mode](topic)
-    if system is None:
+    if mode == "trainer" and not topic:
         return web.json_response({"error": "topic_required"}, status=400)
 
     thread = _thread(mode, topic)
     async with AsyncSessionLocal() as s:
         is_new = (await q.web_thread_len(s, tg_id, thread)) == 0
         await s.commit()
+
+    # Для тренера в начале треда подставляем невиданный кейс из банка.
+    case_text = None
+    if mode == "trainer" and is_new:
+        case_text = await access.next_trainer_case(tg_id, topic)
+    system = get_trainer_prompt(topic, case_text) if mode == "trainer" else SYSTEM_BY_MODE[mode](topic)
+    if system is None:
+        return web.json_response({"error": "topic_required"}, status=400)
 
     # Доступ проверяем на старте треда (как в боте: новый = одно действие).
     if is_new:

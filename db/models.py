@@ -111,6 +111,18 @@ class WebMessage(Base):
     ts: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class SeenCase(Base):
+    """Какие курируемые кейсы тренировки пользователь уже получал — чтобы не
+    повторять. Когда все кейсы темы просмотрены, движок очищает их и цикл идёт заново."""
+    __tablename__ = "seen_cases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tg_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    topic: Mapped[str] = mapped_column(String(48), index=True)
+    idx: Mapped[int] = mapped_column(Integer)
+    ts: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class ScheduledMessage(Base):
     """Очередь отложенных сообщений: окончание триала, истечение подписки,
     win-back, nudge. Тик scheduler читает send_at и шлёт неотправленные."""

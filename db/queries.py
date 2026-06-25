@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import pricing, settings
-from db.models import LlmCall, Payment, ScheduledMessage, User, UserEvent, WebMessage
+from db.models import LlmCall, Payment, ScheduledMessage, SeenCase, User, UserEvent, WebMessage
 
 
 def _utcnow() -> dt.datetime:
@@ -192,6 +192,27 @@ async def schedule_message(
         tg_id=tg_id, kind=kind, send_at=send_at,
         payload_json=json.dumps(payload, ensure_ascii=False) if payload else None,
     ))
+    await session.flush()
+
+
+async def case_last_served(session: AsyncSession, tg_id: int, topic: str) -> dict[int, dt.datetime]:
+    """Для каждого кейса темы — когда его в последний раз показывали юзеру (UTC-aware)."""
+    from sqlalchemy import func
+    rows = (await session.execute(
+        select(SeenCase.idx, func.max(SeenCase.ts))
+        .where(SeenCase.tg_id == tg_id, SeenCase.topic == topic)
+        .group_by(SeenCase.idx)
+    )).all()
+    out: dict[int, dt.datetime] = {}
+    for idx, ts in rows:
+        if ts is not None and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=dt.timezone.utc)
+        out[idx] = ts
+    return out
+
+
+async def mark_case_seen(session: AsyncSession, tg_id: int, topic: str, idx: int) -> None:
+    session.add(SeenCase(tg_id=tg_id, topic=topic, idx=idx))
     await session.flush()
 
 

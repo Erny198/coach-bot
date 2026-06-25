@@ -35,6 +35,7 @@ from knowledge_base import (
     BLOCKS,
     INSTRUMENT_BLOCKS,
     TOPIC_BLOCKS,
+    COACH_TOOLBOX,
     block_name,
     COACHEE_MODE_START,
     COACHEE_SYSTEM_PROMPT,
@@ -543,7 +544,7 @@ def _main_menu_kb(tg_id: int | None = None) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("💳 Тарифы", callback_data="show_pricing")]
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🧭 Коуч — бот коучит меня", callback_data="mode_coach")],
-        [InlineKeyboardButton("🥊 Тренер — ежедневная практика", callback_data="submenu_trainer")],
+        [InlineKeyboardButton("🥊 Тренировка — ежедневная практика", callback_data="submenu_trainer")],
         [InlineKeyboardButton("🔬 Супервизор — разбор сессии", callback_data="mode_supervisor")],
         [InlineKeyboardButton("🌐 Веб-версия (в браузере)", callback_data="web_link")],
         pay_row,
@@ -811,6 +812,8 @@ async def mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         session["trainer_topic"] = topic_key
         session["history"] = []
         session["trainer_exchanges"] = 0
+        # Курируемый кейс из банка, не повторяющийся у этого пользователя.
+        session["trainer_case"] = await access.next_trainer_case(query.from_user.id, topic_key)
 
         topic_name = topic_info["name"]
         emoji = topic_info["emoji"]
@@ -909,7 +912,9 @@ async def _process_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if not topic_key:
             await _show_trainer_topics(update.message)
             return
-        system_prompt = get_trainer_prompt(topic_key)
+        # Кейс из банка подставляем только в первую ситуацию практики.
+        case_text = session.get("trainer_case") if session.get("trainer_exchanges", 0) == 0 else None
+        system_prompt = get_trainer_prompt(topic_key, case_text)
         if session.get("trainer_exchanges", 0) + 1 >= TRAINER_MAX_EXCHANGES:
             system_prompt += TRAINER_FINALE_NOTE
     elif session["mode"] == "supervisor":
@@ -1137,7 +1142,7 @@ def _get_coach_system_prompt(session: dict, heavy_topic: bool = False) -> str:
                 "Мягко завершай работу с инструментом — переходи к интеграции, "
                 "ресурсам и рефлексии."
             )
-        base = COACH_SYSTEM_PROMPT + extra
+        base = COACH_SYSTEM_PROMPT + COACH_TOOLBOX + extra
 
     if heavy_topic:
         base += COACH_HEAVY_TOPIC_NOTE
