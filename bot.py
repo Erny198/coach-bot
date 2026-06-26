@@ -19,7 +19,7 @@ from typing import Any, Dict, List
 import anthropic
 import openai
 from telegram import (
-    InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Update, WebAppInfo,
+    InlineKeyboardButton, InlineKeyboardMarkup, Update,
 )
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -53,9 +53,6 @@ from knowledge_base import (
     COACH_SYSTEM_PROMPT,
     INSTRUMENT_QUESTIONS,
     INSTRUMENTS,
-    INSTRUMENTS_MODE_START,
-    SUPERVISOR_MODE_START,
-    SUPERVISOR_SYSTEM_PROMPT,
     TOPIC_DETAILS,
     TRAINER_MODE_START,
     TRAINER_TOPICS,
@@ -74,39 +71,7 @@ from db.migrations import init_db, migrate_legacy_json  # noqa: E402
 from config import settings as cfg  # noqa: E402
 # sessions импортируем под алиасом: имя `sessions` уже занято словарём
 # диалоговых сессий бота ниже.
-from services import access, texts, scheduler, bridge  # noqa: E402
-from services import sessions as tokens  # noqa: E402
-
-
-def _miniapp_url(tg_id: int) -> str | None:
-    """URL входа в Mini App со свежим подписанным токеном (None, если домен не задан)."""
-    if not cfg.DOMAIN:
-        return None
-    return f"https://{cfg.DOMAIN}/pay/enter?t={tokens.sign(tg_id)}"
-
-
-def _web_url(tg_id: int) -> str | None:
-    """Персональная ссылка на веб-кабинет, действует 10 минут."""
-    if not cfg.DOMAIN:
-        return None
-    return f"https://{cfg.DOMAIN}/app/enter?t={tokens.sign(tg_id, ttl_seconds=600)}"
-
-
-async def _send_web_link(message, tg_id: int) -> None:
-    url = _web_url(tg_id)
-    if not url:
-        await message.reply_text(texts.WEB_UNAVAILABLE)
-        return
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("👉 Открыть веб-версию", url=url)]])
-    await message.reply_text(texts.WEB_INTRO, reply_markup=kb)
-
-
-def _pay_button(tg_id: int, label: str = "💳 Оформить подписку") -> InlineKeyboardButton:
-    """web_app-кнопка, если задан домен; иначе fallback на текстовый список тарифов."""
-    url = _miniapp_url(tg_id)
-    if url:
-        return InlineKeyboardButton(label, web_app=WebAppInfo(url))
-    return InlineKeyboardButton("💳 Тарифы", callback_data="show_pricing")
+from services import access, texts, scheduler  # noqa: E402
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
@@ -470,22 +435,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     sessions.pop(user_id, None)
     _save_sessions()
 
-    # Персональная menu-кнопка Mini App со свежим токеном (если задан домен).
-    mini_url = _miniapp_url(user_id)
-    if mini_url and update.effective_chat:
-        try:
-            await context.bot.set_chat_menu_button(
-                chat_id=update.effective_chat.id,
-                menu_button=MenuButtonWebApp(text="Подписка", web_app=WebAppInfo(mini_url)),
-            )
-        except Exception:
-            logger.debug("set_chat_menu_button skipped", exc_info=True)
-
     if not snap.get("onboarding_done"):
         # Новый пользователь — продающий онбординг: ценность + выбор роли.
         await update.message.reply_text(texts.ONBOARDING_WELCOME, reply_markup=_role_kb())
     else:
-        await update.message.reply_text(texts.MENU_TITLE, reply_markup=_main_menu_kb(user_id))
+        await update.message.reply_text(texts.MENU_TITLE, reply_markup=_main_menu_kb())
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -511,8 +465,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Режимы:\n"
         "🧑‍💼 Коуч — бот проводит сессию\n"
         "🎓 Коучи — бот играет клиента\n"
-        "📚 Тренер — тренировка вопросов\n"
-        "🔬 Супервизор — разбор сессии"
+        "📚 Тренер — тренировка вопросов"
     )
     if _is_admin(update.effective_user):
         text += (
@@ -531,23 +484,10 @@ async def topics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await _show_trainer_topics(update.message)
 
 
-async def web_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    del context
-    if not update.message or not update.effective_user:
-        return
-    await _send_web_link(update.message, update.effective_user.id)
-
-
-def _main_menu_kb(tg_id: int | None = None) -> InlineKeyboardMarkup:
-    """Коммерческое меню из 3 режимов (Тренер раскрывается в подменю)."""
-    pay_row = [_pay_button(tg_id, "💳 Подписка")] if tg_id is not None else \
-        [InlineKeyboardButton("💳 Тарифы", callback_data="show_pricing")]
+def _main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🧭 Коуч — бот коучит меня", callback_data="mode_coach")],
         [InlineKeyboardButton("🥊 Тренировка — ежедневная практика", callback_data="submenu_trainer")],
-        [InlineKeyboardButton("🔬 Супервизор — разбор сессии", callback_data="mode_supervisor")],
-        [InlineKeyboardButton("🌐 Веб-версия (в браузере)", callback_data="web_link")],
-        pay_row,
     ])
 
 
@@ -555,7 +495,6 @@ def _trainer_submenu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎓 Коучи — тренируюсь на клиенте", callback_data="mode_coachee")],
         [InlineKeyboardButton("🥊 Тренер — вопросы по темам", callback_data="mode_trainer")],
-        [InlineKeyboardButton("📋 Инструменты — справочник", callback_data="mode_instruments")],
         [InlineKeyboardButton("↩️ Меню", callback_data="main_menu")],
     ])
 
@@ -569,26 +508,6 @@ def _role_kb() -> InlineKeyboardMarkup:
     ])
 
 
-async def _show_paywall(query, bot_mode: str, reason: str) -> None:
-    """Показать paywall с краткой ценностью и кнопкой тарифов."""
-    kb = InlineKeyboardMarkup([
-        [_pay_button(query.from_user.id)],
-        [InlineKeyboardButton("↩️ Меню", callback_data="main_menu")],
-    ])
-    await query.message.reply_text(texts.paywall_text(bot_mode, reason), reply_markup=kb)
-
-
-async def _gate(query, bot_mode: str) -> bool:
-    """Проверка доступа к режиму. Если нет — показывает paywall и возвращает False.
-    Бесплатное действие списывается внутри check_mode."""
-    allowed, reason = await access.check_mode(
-        query.from_user.id, query.from_user.username,
-        _get_stored_name(query.from_user.id), bot_mode,
-    )
-    if not allowed:
-        await _show_paywall(query, bot_mode, reason)
-    return allowed
-
 
 async def mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -599,22 +518,6 @@ async def mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = query.from_user.id
     session = get_session(user_id)
     data = query.data or ""
-
-    if data == "show_pricing":
-        await query.message.reply_text(texts.pricing_overview())
-        return
-
-    if data == "web_link":
-        await _send_web_link(query.message, query.from_user.id)
-        return
-
-    if data.startswith("instblock_"):
-        bid = data.removeprefix("instblock_")
-        await query.message.reply_text(
-            f"{block_name(bid)} — инструменты:",
-            reply_markup=_instruments_block_kb(bid),
-        )
-        return
 
     if data.startswith("topicblock_"):
         bid = data.removeprefix("topicblock_")
@@ -639,8 +542,6 @@ async def mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     if data == "mode_coach":
-        if not await _gate(query, "coach"):
-            return
         known_name = _get_stored_name(query.from_user.id)
         session["mode"] = "coach"
         session["history"] = []
@@ -671,8 +572,6 @@ async def mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     if data == "mode_coachee":
-        if not await _gate(query, "coachee"):
-            return
         session["mode"] = "coachee"
         session["history"] = []
         session["coachee_profile"] = None  # новый случайный профиль на сессию
@@ -689,27 +588,10 @@ async def mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         _save_sessions()
         return
 
-    if data == "mode_supervisor":
-        if not await _gate(query, "supervisor"):
-            return
-        session["mode"] = "supervisor"
-        session["history"] = []
-        await query.edit_message_text(SUPERVISOR_MODE_START, parse_mode="MarkdownV2")
-        _save_sessions()
-        return
-
-    if data == "mode_instruments":
-        session["mode"] = "instruments"
-        session["history"] = []
-        await query.edit_message_text(INSTRUMENTS_MODE_START, parse_mode="MarkdownV2")
-        await _show_instruments_keyboard(query.message)
-        _save_sessions()
-        return
-
     if data == "main_menu":
         sessions.pop(query.from_user.id, None)
         _save_sessions()
-        await query.message.reply_text(texts.MENU_TITLE, reply_markup=_main_menu_kb(query.from_user.id))
+        await query.message.reply_text(texts.MENU_TITLE, reply_markup=_main_menu_kb())
         return
 
     if data == "coach_name_yes":
@@ -781,27 +663,7 @@ async def mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         _save_sessions()
         return
 
-    if data.startswith("instr_"):
-        if not await _gate(query, "instruments"):
-            return
-        instr_key = data.removeprefix("instr_")
-        questions = INSTRUMENT_QUESTIONS.get(instr_key)
-        if questions is None:
-            await query.message.reply_text("Инструмент не найден.")
-            return
-        session["mode"] = "instruments"
-        nav_keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("📋 К инструментам", callback_data="mode_instruments"),
-                InlineKeyboardButton("↩️ Меню", callback_data="main_menu"),
-            ]
-        ])
-        await query.message.reply_text(questions, reply_markup=nav_keyboard)
-        return
-
     if data.startswith("topic_"):
-        if not await _gate(query, "trainer"):
-            return
         topic_key = data.removeprefix("topic_")
         topic_info = TRAINER_TOPICS.get(topic_key)
         if topic_info is None:
@@ -865,10 +727,6 @@ async def _process_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text("Сначала выбери режим через /start.")
         return
 
-    if session["mode"] == "instruments":
-        await _show_instruments_keyboard(update.message)
-        return
-
     # Сбор имени — фазы ASK_NAME и CONFIRM_NAME
     if session["mode"] == "coach" and session.get("coach_phase") in (
         COACH_PHASE_ASK_NAME, COACH_PHASE_CONFIRM_NAME
@@ -917,8 +775,6 @@ async def _process_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
         system_prompt = get_trainer_prompt(topic_key, case_text)
         if session.get("trainer_exchanges", 0) + 1 >= TRAINER_MAX_EXCHANGES:
             system_prompt += TRAINER_FINALE_NOTE
-    elif session["mode"] == "supervisor":
-        system_prompt = SUPERVISOR_SYSTEM_PROMPT
     else:
         await update.message.reply_text("Нажми /start для начала.")
         return
@@ -1202,8 +1058,6 @@ def _mode_header(session: dict) -> str:
         return f"🧑‍💼 Коуч • {phase_label}\n{sep}"
     if mode == "coachee":
         return f"🎓 Коучи\n{sep}"
-    if mode == "supervisor":
-        return f"🔬 Супервизор\n{sep}"
     if mode == "trainer":
         topic_key = session.get("trainer_topic") or ""
         topic_info = TRAINER_TOPICS.get(topic_key, {})
@@ -1223,32 +1077,6 @@ def _block_menu_kb(prefix: str) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton("↩️ Меню", callback_data="main_menu")])
     return InlineKeyboardMarkup(rows)
 
-
-def _instruments_block_kb(block_id: str) -> InlineKeyboardMarkup:
-    """Инструменты внутри блока (2 в ряду) + возврат к блокам."""
-    rows = []
-    keys = INSTRUMENT_BLOCKS.get(block_id, [])
-    for i in range(0, len(keys), 2):
-        row = []
-        for key in keys[i : i + 2]:
-            info = INSTRUMENTS.get(key)
-            if not info:
-                continue
-            row.append(InlineKeyboardButton(f"{info['emoji']} {info['name']}", callback_data=f"instr_{key}"))
-        rows.append(row)
-    rows.append([
-        InlineKeyboardButton("⬅️ Блоки", callback_data="mode_instruments"),
-        InlineKeyboardButton("↩️ Меню", callback_data="main_menu"),
-    ])
-    return InlineKeyboardMarkup(rows)
-
-
-async def _show_instruments_keyboard(message) -> None:
-    """Показать выбор блока инструментов (двухуровневая навигация)."""
-    await message.reply_text(
-        "📋 Инструменты — выбери блок:",
-        reply_markup=_block_menu_kb("instblock"),
-    )
 
 
 def _trainer_topics_keyboard() -> InlineKeyboardMarkup:
@@ -1460,12 +1288,6 @@ async def _post_init(application) -> None:
         logger.warning("Legacy migrate skipped: %s", e)
     # Фоновый планировщик напоминаний.
     asyncio.create_task(scheduler.run_loop(application.bot))
-    # HTTP-мост для Mini App и вебхука ЮKassa.
-    if cfg.RUN_BRIDGE:
-        try:
-            await bridge.start_bridge(application.bot, cfg.BRIDGE_HOST, cfg.BRIDGE_PORT)
-        except Exception:
-            logger.exception("Bridge failed to start")
 
 
 def main() -> None:
@@ -1494,7 +1316,6 @@ def main() -> None:
     application.add_handler(CommandHandler("reset", reset))
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("topics", topics_cmd))
-    application.add_handler(CommandHandler("web", web_cmd))
     application.add_handler(CommandHandler("report", report_cmd))
     application.add_handler(CommandHandler("stats", stats_cmd))
     application.add_handler(CommandHandler("adduser", adduser_cmd))

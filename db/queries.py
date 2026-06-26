@@ -64,7 +64,7 @@ async def set_email_if_absent(session: AsyncSession, user: User) -> str:
 
 # ── Подписки ────────────────────────────────────────────────────────────--
 async def grant_subscription(
-    session: AsyncSession, tg_id: int, tier: str, period: str, *, is_trial: bool = False,
+    session: AsyncSession, tg_id: int, tier: str, period: str,
 ) -> User:
     """Выдать/продлить подписку. Идемпотентно по сроку: если доступ ещё активен,
     продлеваем от текущего access_until, иначе — от now."""
@@ -74,7 +74,6 @@ async def grant_subscription(
     base = _aware(user.access_until) if (user.access_until and _aware(user.access_until) > now) else now
     user.subscription_tier = tier
     user.access_until = base + dt.timedelta(days=days)
-    user.is_trial = is_trial
     await session.flush()
     return user
 

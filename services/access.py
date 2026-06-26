@@ -98,14 +98,10 @@ async def log_llm(tg_id: int, mode: str | None, tokens_in: int, tokens_out: int,
 
 
 # ── Подписка + автонапоминания ────────────────────────────────────────────
-async def apply_subscription(
-    tg_id: int, tier: str, period: str, *, is_trial: bool = False,
-) -> dict:
-    """Выдать подписку и поставить напоминание об истечении за 3 дня до конца.
-    Старые неотправленные «expiring» снимаем, чтобы не было дублей. Этим
-    пользуется вебхук оплаты (этап 4)."""
+async def apply_subscription(tg_id: int, tier: str, period: str) -> dict:
+    """Выдать подписку и поставить напоминание об истечении за 3 дня до конца."""
     async with AsyncSessionLocal() as s:
-        user = await q.grant_subscription(s, tg_id, tier, period, is_trial=is_trial)
+        user = await q.grant_subscription(s, tg_id, tier, period)
         await q.clear_unsent(s, tg_id, "expiring")
         until = user.access_until
         if until is not None:
@@ -114,7 +110,7 @@ async def apply_subscription(
             send_at = until - dt.timedelta(days=3)
             if send_at > dt.datetime.now(dt.timezone.utc):
                 await q.schedule_message(s, tg_id, "expiring", send_at)
-        await q.log_event(s, tg_id, "purchase", {"tier": tier, "period": period, "trial": is_trial})
+        await q.log_event(s, tg_id, "purchase", {"tier": tier, "period": period})
         snap = {"tier": user.subscription_tier, "until": user.access_until.isoformat() if user.access_until else None}
         await s.commit()
         return snap
