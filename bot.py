@@ -687,6 +687,10 @@ async def mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         _save_sessions()
         return
 
+    if data == "coachee_continue":
+        await query.edit_message_text("Продолжаем! Задай следующий вопрос клиенту.")
+        return
+
     if data.startswith("topic_"):
         topic_key = data.removeprefix("topic_")
         topic_info = TRAINER_TOPICS.get(topic_key)
@@ -821,6 +825,14 @@ async def _process_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
         session["history"] = session["history"][-(MAX_HISTORY * 2):]
 
     await _send_long_message(update.message, _mode_header(session) + reply)
+
+    # Коучи: показать кнопки меню после каждого блока обратной связи тренера
+    if session["mode"] == "coachee" and "ОБРАТНАЯ СВЯЗЬ ТРЕНЕРА" in reply:
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Продолжить сессию", callback_data="coachee_continue"),
+            InlineKeyboardButton("↩️ Меню", callback_data="main_menu"),
+        ]])
+        await update.message.reply_text("Продолжаем или выходим в меню?", reply_markup=keyboard)
 
     # Финал практики в Тренере — разбор выдан, предложить продолжение
     if session["mode"] == "trainer" and session.get("trainer_exchanges", 0) >= TRAINER_MAX_EXCHANGES:
