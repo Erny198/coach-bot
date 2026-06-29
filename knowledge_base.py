@@ -3678,12 +3678,12 @@ INSTRUMENT_BLOCKS = {
 }
 
 TOPIC_BLOCKS = {
-    "goal":      ["score", "wfo", "wfo_structure", "descartes", "intention", "mission", "grow", "requests"],
-    "presence":  ["compass", "meditation", "attention_12", "multilevel", "bagel", "emotions", "calibration"],
-    "listening": ["meta_model", "speech_patterns", "rewind", "precision"],
-    "awareness": ["perception_positions", "neuro_levels", "two_chairs", "transactional_analysis", "limiting", "johari", "reframe"],
-    "patterns":  ["patterns_reveal", "prof_patterns", "evolution_loops", "change_types", "grief_kubler_ross", "metaphor", "kahler_drivers", "karpman"],
-    "action":    ["genius", "success_cycle", "hudson_wheel", "kolb", "direct_comm", "zones", "desc"],
+    "goal":      ["score", "wfo", "descartes"],
+    "presence":  ["compass", "emotions", "multilevel"],
+    "listening": ["meta_model", "rewind", "speech_patterns"],
+    "awareness": ["limiting", "neuro_levels", "perception_positions"],
+    "patterns":  ["karpman", "kahler_drivers", "patterns_reveal"],
+    "action":    ["genius", "hudson_wheel", "zones"],
 }
 
 
