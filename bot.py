@@ -132,8 +132,10 @@ SESSIONS_FILE = os.path.join(DATA_DIR, "sessions.json")
 
 # Динамический список доступа — управляется через /adduser и /removeuser
 ALLOWED_FILE = os.path.join(DATA_DIR, "allowed_users.json")
+ALLOWED_IDS_FILE = os.path.join(DATA_DIR, "allowed_ids.json")
 ADMIN_USERNAME = "ErnestKh8"
 _allowed_users: set[str] = set()
+_allowed_ids: set[int] = set()
 
 
 def _load_sessions() -> None:
@@ -172,6 +174,24 @@ def _save_allowed_users() -> None:
             json.dump(sorted(_allowed_users), f, ensure_ascii=False, indent=2)
     except OSError as e:
         logger.warning("Could not save allowed users: %s", e)
+
+
+def _load_allowed_ids() -> None:
+    global _allowed_ids
+    try:
+        with open(ALLOWED_IDS_FILE, "r", encoding="utf-8") as f:
+            _allowed_ids = set(json.load(f))
+        logger.info("Loaded %d allowed IDs from %s", len(_allowed_ids), ALLOWED_IDS_FILE)
+    except (FileNotFoundError, json.JSONDecodeError):
+        _allowed_ids = set()
+
+
+def _save_allowed_ids() -> None:
+    try:
+        with open(ALLOWED_IDS_FILE, "w", encoding="utf-8") as f:
+            json.dump(sorted(_allowed_ids), f, indent=2)
+    except OSError as e:
+        logger.warning("Could not save allowed IDs: %s", e)
 
 
 def _load_user_names() -> None:
@@ -308,10 +328,14 @@ async def _notify_admin_denied(context, user) -> None:
 
 
 def _is_allowed(user) -> bool:
-    """Проверить, есть ли username пользователя в списке доступа."""
-    if not user or not user.username:
+    """Проверить доступ по username или Telegram ID."""
+    if not user:
         return False
-    return user.username in _allowed_users
+    if user.id in _allowed_ids:
+        return True
+    if user.username and user.username in _allowed_users:
+        return True
+    return False
 
 
 def _is_admin(user) -> bool:
@@ -1155,7 +1179,7 @@ async def report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def adduser_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Открыть доступ пользователю: /adduser ник (только админ)."""
+    """Открыть доступ: /adduser username или /adduser 123456789 (только админ)."""
     if not update.effective_user or not update.message:
         return
     if not _is_admin(update.effective_user):
@@ -1163,19 +1187,30 @@ async def adduser_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     args = context.args or []
     if not args:
-        await update.message.reply_text("Использование: /adduser ник (можно с @)")
+        await update.message.reply_text(
+            "Использование:\n/adduser username — по нику\n/adduser 123456789 — по Telegram ID"
+        )
         return
-    username = args[0].lstrip("@")
-    if username in _allowed_users:
-        await update.message.reply_text(f"@{username} уже в списке доступа.")
-        return
-    _allowed_users.add(username)
-    _save_allowed_users()
-    await update.message.reply_text(f"✅ Доступ открыт: @{username}")
+    arg = args[0].lstrip("@")
+    if arg.isdigit():
+        tg_id = int(arg)
+        if tg_id in _allowed_ids:
+            await update.message.reply_text(f"ID {tg_id} уже в списке доступа.")
+            return
+        _allowed_ids.add(tg_id)
+        _save_allowed_ids()
+        await update.message.reply_text(f"✅ Доступ открыт по ID: {tg_id}")
+    else:
+        if arg in _allowed_users:
+            await update.message.reply_text(f"@{arg} уже в списке доступа.")
+            return
+        _allowed_users.add(arg)
+        _save_allowed_users()
+        await update.message.reply_text(f"✅ Доступ открыт: @{arg}")
 
 
 async def removeuser_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Закрыть доступ пользователю: /removeuser ник (только админ)."""
+    """Закрыть доступ: /removeuser username или /removeuser 123456789 (только админ)."""
     if not update.effective_user or not update.message:
         return
     if not _is_admin(update.effective_user):
@@ -1183,18 +1218,51 @@ async def removeuser_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     args = context.args or []
     if not args:
-        await update.message.reply_text("Использование: /removeuser ник (можно с @)")
+        await update.message.reply_text(
+            "Использование:\n/removeuser username — по нику\n/removeuser 123456789 — по Telegram ID"
+        )
         return
-    username = args[0].lstrip("@")
-    if username == ADMIN_USERNAME:
-        await update.message.reply_text("Нельзя закрыть доступ администратору.")
+    arg = args[0].lstrip("@")
+    if arg.isdigit():
+        tg_id = int(arg)
+        if tg_id not in _allowed_ids:
+            await update.message.reply_text(f"ID {tg_id} нет в списке доступа.")
+            return
+        _allowed_ids.discard(tg_id)
+        _save_allowed_ids()
+        await update.message.reply_text(f"✅ Доступ закрыт для ID: {tg_id}")
+    else:
+        if arg == ADMIN_USERNAME:
+            await update.message.reply_text("Нельзя закрыть доступ администратору.")
+            return
+        if arg not in _allowed_users:
+            await update.message.reply_text(f"@{arg} нет в списке доступа.")
+            return
+        _allowed_users.discard(arg)
+        _save_allowed_users()
+        await update.message.reply_text(f"✅ Доступ закрыт: @{arg}")
+
+
+async def listusers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Список всех пользователей с доступом (только админ)."""
+    del context
+    if not update.effective_user or not update.message:
         return
-    if username not in _allowed_users:
-        await update.message.reply_text(f"@{username} нет в списке доступа.")
+    if not _is_admin(update.effective_user):
+        await update.message.reply_text("⛔ Команда только для администратора.")
         return
-    _allowed_users.discard(username)
-    _save_allowed_users()
-    await update.message.reply_text(f"✅ Доступ закрыт: @{username}")
+    lines = ["👥 Список доступа:\n"]
+    if _allowed_users:
+        lines.append("По username:")
+        for u in sorted(_allowed_users):
+            lines.append(f"  @{u}")
+    if _allowed_ids:
+        lines.append("\nПо Telegram ID:")
+        for i in sorted(_allowed_ids):
+            lines.append(f"  {i}")
+    if not _allowed_users and not _allowed_ids:
+        lines.append("Список пуст.")
+    await update.message.reply_text("\n".join(lines))
 
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1305,6 +1373,7 @@ def main() -> None:
     _load_activity()
     _load_sessions()
     _load_allowed_users()
+    _load_allowed_ids()
     _load_admin_chat()
     init_claude()
     init_openai()
@@ -1320,6 +1389,7 @@ def main() -> None:
     application.add_handler(CommandHandler("stats", stats_cmd))
     application.add_handler(CommandHandler("adduser", adduser_cmd))
     application.add_handler(CommandHandler("removeuser", removeuser_cmd))
+    application.add_handler(CommandHandler("listusers", listusers_cmd))
     application.add_handler(CallbackQueryHandler(mode_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
